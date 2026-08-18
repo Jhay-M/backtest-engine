@@ -5,7 +5,7 @@ Wiring, once the concrete components land, will read:
     config = BacktestConfig.from_yaml("examples/ma_crossover.yaml")
     engine = BacktestEngine(
         data=HistoricCSVDataHandler(config.data_path, config.symbol),
-        strategy=MovingAverageCrossStrategy(short=20, long=50),
+        strategy=MovingAverageCrossStrategy(config.symbol, short_window=20, long_window=50),
         portfolio=RiskBasedPortfolio(config),
         execution=SimulatedExecutionHandler(config.costs, data),
         config=config,

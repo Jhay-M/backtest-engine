@@ -23,7 +23,7 @@ from backtester.events import (
 )
 from backtester.execution import ExecutionHandler
 from backtester.portfolio import Portfolio
-from backtester.strategy import Strategy
+from backtester.strategy import MovingAverageCrossStrategy, Strategy
 
 __version__ = "0.1.0"
 
@@ -38,6 +38,7 @@ __all__ = [
     "FillEvent",
     "HistoricCSVDataHandler",
     "MarketEvent",
+    "MovingAverageCrossStrategy",
     "OrderEvent",
     "OrderSide",
     "OrderType",
