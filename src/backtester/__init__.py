@@ -8,7 +8,7 @@ implementations live in their respective modules and are wired together by
 from __future__ import annotations
 
 from backtester.config import BacktestConfig, CostConfig
-from backtester.data import DataHandler
+from backtester.data import DataHandler, HistoricCSVDataHandler
 from backtester.engine import BacktestEngine
 from backtester.events import (
     Event,
@@ -36,6 +36,7 @@ __all__ = [
     "EventType",
     "ExecutionHandler",
     "FillEvent",
+    "HistoricCSVDataHandler",
     "MarketEvent",
     "OrderEvent",
     "OrderSide",
