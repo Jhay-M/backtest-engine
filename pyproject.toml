@@ -1,0 +1,113 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "backtester"
+version = "0.1.0"
+description = "Event-driven crypto backtesting engine (BTC/USD demo)."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Joshua M." }]
+keywords = ["backtesting", "trading", "crypto", "quant", "event-driven"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business :: Financial :: Investment",
+    "Typing :: Typed",
+]
+
+# Core runtime footprint is deliberately small — heavy libs are confined to
+# I/O (pandas/pyarrow) and plotting (matplotlib). Metrics are computed in
+# numpy by hand rather than pulled from quantstats/empyrical.
+dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.1",
+    "pyarrow>=14.0",
+    "matplotlib>=3.8",
+    "pydantic>=2.5",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "hypothesis>=6.100",
+    "ruff>=0.5",
+    "black>=24.4",
+    "mypy>=1.10",
+    "pandas-stubs>=2.1",
+    "types-pyyaml>=6.0",
+    "pre-commit>=3.7",
+]
+# `fetch` is for the data-download script only; never imported by the engine.
+fetch = ["ccxt>=4.3"]
+
+[project.urls]
+Homepage = "https://github.com/Jhay-M/backtest-engine"
+Repository = "https://github.com/Jhay-M/backtest-engine"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/backtester"]
+
+# ---------------------------------------------------------------------------
+# Linting — ruff as the linter (import sorting, bugbear, pyflakes, docstrings).
+# Formatting is delegated to black; line lengths are kept in sync at 100.
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "SIM", "RUF", "D"]
+ignore = ["D203", "D213"]  # incompatible docstring rules; pick one of each pair
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["D"]          # tests document themselves via names
+"examples/*" = ["D"]
+
+# ---------------------------------------------------------------------------
+# Formatting
+# ---------------------------------------------------------------------------
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+# ---------------------------------------------------------------------------
+# Type checking — strict; third-party stubs added where they exist, missing
+# imports silenced only for libs that ship no types.
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unreachable = true
+show_error_codes = true
+files = ["src", "tests"]
+
+[[tool.mypy.overrides]]
+module = ["matplotlib.*", "ccxt.*"]
+ignore_missing_imports = true
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "-ra -q --strict-markers"
+
+[tool.coverage.run]
+branch = true
+source = ["backtester"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
