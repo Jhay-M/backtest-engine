@@ -1,12 +1,13 @@
-"""The event loop dispatches each event kind to the right component in order.
+"""The engine's per-bar sequence: fill pending -> mark -> signal -> submit.
 
-Minimal in-test fakes stand in for the four components so the loop's wiring can
-be verified without any concrete strategy or data implementation existing yet.
+Minimal in-test fakes stand in for the four components so the loop's wiring and
+its next-bar-open timing can be verified in isolation.
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pandas as pd
 
@@ -26,19 +27,16 @@ from backtester.execution import ExecutionHandler
 from backtester.portfolio import Portfolio
 from backtester.strategy import Strategy
 
-_START = datetime(2021, 1, 1)
+_START = datetime(2021, 1, 1, tzinfo=UTC)
+_UNUSED = Path("unused.csv")
 
 
-def _bar(i: int) -> MarketEvent:
-    return MarketEvent(
-        timestamp=_START + timedelta(hours=i),
-        symbol="BTC/USD",
-        open=100.0 + i,
-        high=101.0 + i,
-        low=99.0 + i,
-        close=100.5 + i,
-        volume=1.0,
-    )
+def _bar(i: int, open_: float, close: float) -> MarketEvent:
+    return MarketEvent(_START + timedelta(hours=i), "BTC/USD", open_, open_, close, close, 1.0)
+
+
+def _config() -> BacktestConfig:
+    return BacktestConfig(data_path=_UNUSED, symbol="BTC/USD")
 
 
 class FakeData(DataHandler):
@@ -50,9 +48,7 @@ class FakeData(DataHandler):
 
     def update_bars(self) -> MarketEvent | None:
         self._i += 1
-        if self._i >= len(self._bars):
-            return None
-        return self._bars[self._i]
+        return self._bars[self._i] if self._i < len(self._bars) else None
 
     def get_latest_bars(self, symbol: str, n: int = 1) -> list[MarketEvent]:
         return self._bars[max(0, self._i - n + 1) : self._i + 1]
@@ -63,7 +59,7 @@ class FakeData(DataHandler):
 
 
 class FakeStrategy(Strategy):
-    """Emits one LONG signal on the very first bar it sees."""
+    """Emits one LONG signal on the first bar it sees."""
 
     def __init__(self) -> None:
         self._fired = False
@@ -76,10 +72,11 @@ class FakeStrategy(Strategy):
 
 
 class RecordingPortfolio(Portfolio):
-    """Records the sequence of callbacks and sizes any signal to one unit."""
+    """Records the callback sequence and sizes any signal to one unit."""
 
     def __init__(self) -> None:
         self.calls: list[str] = []
+        self.fills: list[FillEvent] = []
 
     def on_market(self, event: MarketEvent) -> None:
         self.calls.append("market")
@@ -92,44 +89,62 @@ class RecordingPortfolio(Portfolio):
 
     def on_fill(self, event: FillEvent) -> None:
         self.calls.append("fill")
+        self.fills.append(event)
 
     def equity_curve(self) -> pd.DataFrame:
-        return pd.DataFrame({"equity": [100.0, 101.0]})
+        return pd.DataFrame({"equity": [1.0]})
 
 
 class FakeExecution(ExecutionHandler):
-    """Fills at a flat price with token costs."""
+    """Defers fills to the next bar's open, like the real handler."""
 
-    def execute_order(self, event: OrderEvent) -> FillEvent:
-        return FillEvent(
-            timestamp=event.timestamp,
-            symbol=event.symbol,
-            side=event.side,
-            quantity=event.quantity,
-            fill_price=100.0,
-            commission=0.1,
-            slippage=0.05,
-        )
+    def __init__(self) -> None:
+        self._pending: list[OrderEvent] = []
+
+    def submit_order(self, order: OrderEvent) -> None:
+        self._pending.append(order)
+
+    def on_market(self, event: MarketEvent) -> list[FillEvent]:
+        fills = [
+            FillEvent(event.timestamp, o.symbol, o.side, o.quantity, event.open, 0.0, 0.0)
+            for o in self._pending
+        ]
+        self._pending = []
+        return fills
 
 
-def _config(tmp_path: object) -> BacktestConfig:
-    return BacktestConfig(data_path=str(tmp_path))  # type: ignore[arg-type]
-
-
-def test_full_event_cascade_in_order(tmp_path: object) -> None:
+def test_per_bar_sequence_and_next_bar_open_fill() -> None:
+    bars = [_bar(0, open_=100.0, close=105.0), _bar(1, open_=110.0, close=115.0)]
     portfolio = RecordingPortfolio()
     engine = BacktestEngine(
-        data=FakeData([_bar(0), _bar(1)]),
+        data=FakeData(bars),
         strategy=FakeStrategy(),
         portfolio=portfolio,
         execution=FakeExecution(),
-        config=_config(tmp_path),
+        config=_config(),
     )
 
-    curve = engine.run()
+    engine.run()
 
-    # Bar 0 cascades market -> signal -> (order) -> fill; bar 1 is market-only.
+    # Bar 0: mark, then signal (order submitted). Bar 1: fill, then mark.
     assert portfolio.calls == ["market", "signal", "fill", "market"]
-    # A fill is never processed before the signal that produced it.
-    assert portfolio.calls.index("signal") < portfolio.calls.index("fill")
-    assert list(curve.columns) == ["equity"]
+    # The fill is priced at bar 1's open (110), never bar 0's close (105).
+    assert len(portfolio.fills) == 1
+    assert portfolio.fills[0].fill_price == 110.0
+
+
+def test_order_on_final_bar_never_fills() -> None:
+    # The strategy fires on the only bar, so its order has no next bar to fill on.
+    portfolio = RecordingPortfolio()
+    engine = BacktestEngine(
+        data=FakeData([_bar(0, open_=100.0, close=105.0)]),
+        strategy=FakeStrategy(),
+        portfolio=portfolio,
+        execution=FakeExecution(),
+        config=_config(),
+    )
+
+    engine.run()
+
+    assert portfolio.fills == []
+    assert "fill" not in portfolio.calls

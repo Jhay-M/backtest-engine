@@ -7,7 +7,7 @@ Wiring, once the concrete components land, will read:
         data=HistoricCSVDataHandler(config.data_path, config.symbol),
         strategy=MovingAverageCrossStrategy(config.symbol, short_window=20, long_window=50),
         portfolio=RiskBasedPortfolio(config),
-        execution=SimulatedExecutionHandler(config.costs, data),
+        execution=SimulatedExecutionHandler(config.costs),
         config=config,
     )
     equity = engine.run()

@@ -21,7 +21,7 @@ from backtester.events import (
     SignalDirection,
     SignalEvent,
 )
-from backtester.execution import ExecutionHandler
+from backtester.execution import ExecutionHandler, SimulatedExecutionHandler
 from backtester.portfolio import Portfolio, RiskBasedPortfolio
 from backtester.strategy import MovingAverageCrossStrategy, Strategy
 
@@ -46,6 +46,7 @@ __all__ = [
     "RiskBasedPortfolio",
     "SignalDirection",
     "SignalEvent",
+    "SimulatedExecutionHandler",
     "SizingConfig",
     "Strategy",
     "__version__",

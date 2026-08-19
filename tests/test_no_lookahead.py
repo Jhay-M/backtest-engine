@@ -24,12 +24,18 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from backtester.config import BacktestConfig
+from backtester.config import BacktestConfig, CostConfig
 from backtester.data import HistoricCSVDataHandler
 from backtester.engine import BacktestEngine
-from backtester.events import FillEvent, MarketEvent, OrderEvent, SignalEvent
-from backtester.execution import ExecutionHandler
-from backtester.portfolio import Portfolio
+from backtester.events import (
+    FillEvent,
+    MarketEvent,
+    OrderEvent,
+    SignalDirection,
+    SignalEvent,
+)
+from backtester.execution import ExecutionHandler, SimulatedExecutionHandler
+from backtester.portfolio import Portfolio, RiskBasedPortfolio
 from backtester.strategy import Strategy
 
 SAMPLE = Path(__file__).resolve().parents[1] / "data" / "BTCUSD_1h_sample.csv"
@@ -82,10 +88,13 @@ class _NoopPortfolio(Portfolio):
 
 
 class _UnusedExecution(ExecutionHandler):
-    """Fails loudly if reached — the spy strategy emits no orders."""
+    """The spy strategy emits no orders, so nothing is ever submitted."""
 
-    def execute_order(self, event: OrderEvent) -> FillEvent:
-        raise AssertionError("execution must not run when no signals fire")
+    def submit_order(self, order: OrderEvent) -> None:
+        raise AssertionError("no orders expected from the spy strategy")
+
+    def on_market(self, event: MarketEvent) -> list[FillEvent]:
+        return []
 
 
 class _VisibilitySpyStrategy(Strategy):
@@ -122,7 +131,66 @@ def test_engine_strategy_never_sees_a_future_bar() -> None:
     assert spy.violations == []
 
 
-@pytest.mark.skip(reason="pending SimulatedExecutionHandler (step 4)")
+class _FireOnceStrategy(Strategy):
+    """Emits a single LONG on a chosen bar index, to pin down fill timing."""
+
+    def __init__(self, fire_index: int, symbol: str) -> None:
+        self._fire_index = fire_index
+        self._symbol = symbol
+        self._i = -1
+
+    def calculate_signals(self, event: MarketEvent) -> list[SignalEvent]:
+        self._i += 1
+        if self._i == self._fire_index:
+            return [SignalEvent(event.timestamp, self._symbol, SignalDirection.LONG)]
+        return []
+
+
+class _RecordingExecution(SimulatedExecutionHandler):
+    """Simulated executor that also records every fill it produces."""
+
+    def __init__(self, costs: CostConfig) -> None:
+        super().__init__(costs)
+        self.fills: list[FillEvent] = []
+
+    def on_market(self, event: MarketEvent) -> list[FillEvent]:
+        produced = super().on_market(event)
+        self.fills.extend(produced)
+        return produced
+
+
 def test_fill_prices_at_next_bar_open() -> None:
-    """Every fill is priced at the open of the bar after its signal."""
-    raise NotImplementedError
+    opens = [100.0, 110.0, 120.0, 130.0, 140.0, 150.0]
+    closes = [105.0, 115.0, 125.0, 135.0, 145.0, 155.0]
+    bars = [
+        MarketEvent(
+            _START + timedelta(hours=i),
+            "BTC/USD",
+            open=o,
+            high=max(o, c) + 1.0,
+            low=min(o, c) - 1.0,
+            close=c,
+            volume=1.0,
+        )
+        for i, (o, c) in enumerate(zip(opens, closes, strict=True))
+    ]
+    # Zero costs so the fill lands exactly on the open, isolating the timing.
+    execution = _RecordingExecution(CostConfig(commission_bps=0.0, slippage_bps=0.0))
+    config = BacktestConfig(data_path=SAMPLE, symbol="BTC/USD")
+    engine = BacktestEngine(
+        data=HistoricCSVDataHandler.from_bars(bars, "BTC/USD"),
+        strategy=_FireOnceStrategy(fire_index=3, symbol="BTC/USD"),
+        portfolio=RiskBasedPortfolio(config),
+        execution=execution,
+        config=config,
+    )
+
+    engine.run()
+
+    # The signal is raised on bar 3; its order fills at bar 4's OPEN (140.0),
+    # never bar 3's close (135.0). That is the execution-side no-lookahead proof.
+    assert len(execution.fills) == 1
+    fill = execution.fills[0]
+    assert fill.timestamp == bars[4].timestamp
+    assert fill.fill_price == pytest.approx(bars[4].open)
+    assert fill.fill_price != bars[3].close

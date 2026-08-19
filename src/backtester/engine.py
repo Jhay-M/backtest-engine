@@ -1,11 +1,16 @@
 """The event loop that ties the four components together.
 
-The loop is single-threaded and queue-driven. A ``collections.deque`` is used
-rather than ``queue.Queue`` because there is no cross-thread contention to
-guard against — the lock overhead of a synchronised queue would buy nothing.
+The loop is single-threaded. Per bar the order of operations is fixed, and that
+ordering is the crux of the no-lookahead guarantee:
 
-Dispatch is by ``isinstance`` so the type checker narrows the event union and
-each branch sees a concrete event type.
+    1. fill orders pending from the previous bar, at THIS bar's open;
+    2. mark the portfolio to market (so equity reflects those fills);
+    3. let the strategy react to this bar and size any signals into orders,
+       which are submitted for execution at the NEXT bar's open.
+
+A ``collections.deque`` carries the intra-bar signal -> order cascade; a richer
+system may grow deeper cascades (child orders, fill-driven signals) without the
+loop changing.
 """
 
 from __future__ import annotations
@@ -19,7 +24,7 @@ import pandas as pd
 
 from backtester.config import BacktestConfig
 from backtester.data import DataHandler
-from backtester.events import Event, FillEvent, MarketEvent, OrderEvent, SignalEvent
+from backtester.events import MarketEvent, OrderEvent, SignalEvent
 from backtester.execution import ExecutionHandler
 from backtester.portfolio import Portfolio
 from backtester.strategy import Strategy
@@ -30,8 +35,8 @@ logger = logging.getLogger(__name__)
 class BacktestEngine:
     """Drives ``MarketEvent -> SignalEvent -> OrderEvent -> FillEvent``.
 
-    The engine owns only the loop and the queue; all behaviour lives in the
-    injected components, which are addressed purely through their abstract
+    The engine owns only the loop and the intra-bar queue; all behaviour lives
+    in the injected components, addressed purely through their abstract
     interfaces. That dependency injection is what lets a live feed, a real
     executor, or an ML strategy replace a piece without the loop changing.
     """
@@ -59,7 +64,7 @@ class BacktestEngine:
         self.portfolio = portfolio
         self.execution = execution
         self.config = config
-        self._queue: deque[Event] = deque()
+        self._queue: deque[SignalEvent | OrderEvent] = deque()
         self._seed(config.seed)
 
     @staticmethod
@@ -71,34 +76,35 @@ class BacktestEngine:
     def run(self) -> pd.DataFrame:
         """Run the backtest to exhaustion and return the equity curve.
 
-        The outer loop pulls one new bar at a time; the inner loop drains every
-        event that bar cascades into before the clock advances. This ordering
-        is what enforces "signal at ``t``, fill at ``t+1``": a fill can never be
-        priced on the bar that produced its signal.
+        Orders still pending after the final bar never fill — there is no next
+        bar to price them at, and peeking past the data would be lookahead.
 
         Returns:
             The portfolio's equity curve as a time-indexed frame.
         """
         while self.data.continue_backtest:
-            market = self.data.update_bars()
-            if market is None:
+            bar = self.data.update_bars()
+            if bar is None:
                 break
-            self._queue.append(market)
-            self._drain()
+            self._process_bar(bar)
         return self.portfolio.equity_curve()
 
-    def _drain(self) -> None:
-        """Process the queue until it is empty."""
+    def _process_bar(self, bar: MarketEvent) -> None:
+        """Run the fixed fill -> mark -> signal sequence for one bar."""
+        # 1. Fill orders pending from the previous bar at THIS bar's open, and
+        #    apply them before marking so equity reflects the new position.
+        for fill in self.execution.on_market(bar):
+            self.portfolio.on_fill(fill)
+        # 2. Mark to market for this bar.
+        self.portfolio.on_market(bar)
+        # 3. Strategy reacts; size signals into orders and submit them for
+        #    execution at the NEXT bar's open.
+        self._queue.extend(self.strategy.calculate_signals(bar))
         while self._queue:
             event = self._queue.popleft()
-            if isinstance(event, MarketEvent):
-                self.portfolio.on_market(event)
-                self._queue.extend(self.strategy.calculate_signals(event))
-            elif isinstance(event, SignalEvent):
+            if isinstance(event, SignalEvent):
                 order = self.portfolio.on_signal(event)
                 if order is not None:
                     self._queue.append(order)
             elif isinstance(event, OrderEvent):
-                self._queue.append(self.execution.execute_order(event))
-            elif isinstance(event, FillEvent):
-                self.portfolio.on_fill(event)
+                self.execution.submit_order(event)
