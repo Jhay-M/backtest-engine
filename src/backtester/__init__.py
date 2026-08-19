@@ -7,7 +7,7 @@ implementations live in their respective modules and are wired together by
 
 from __future__ import annotations
 
-from backtester.config import BacktestConfig, CostConfig
+from backtester.config import BacktestConfig, CostConfig, SizingConfig
 from backtester.data import DataHandler, HistoricCSVDataHandler
 from backtester.engine import BacktestEngine
 from backtester.events import (
@@ -22,7 +22,7 @@ from backtester.events import (
     SignalEvent,
 )
 from backtester.execution import ExecutionHandler
-from backtester.portfolio import Portfolio
+from backtester.portfolio import Portfolio, RiskBasedPortfolio
 from backtester.strategy import MovingAverageCrossStrategy, Strategy
 
 __version__ = "0.1.0"
@@ -43,8 +43,10 @@ __all__ = [
     "OrderSide",
     "OrderType",
     "Portfolio",
+    "RiskBasedPortfolio",
     "SignalDirection",
     "SignalEvent",
+    "SizingConfig",
     "Strategy",
     "__version__",
 ]

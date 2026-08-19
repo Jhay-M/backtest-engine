@@ -27,6 +27,25 @@ class CostConfig(BaseModel):
     )
 
 
+class SizingConfig(BaseModel):
+    """Risk-based position-sizing parameters.
+
+    A position is sized so that an adverse move of ``stop_loss_pct`` would cost
+    exactly ``risk_fraction`` of current equity (fixed-fractional risk). The
+    stop distance only *sizes* the trade — v1 does not place protective stop
+    orders (advanced order types are out of scope).
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    risk_fraction: float = Field(
+        default=0.02, gt=0.0, le=1.0, description="Equity fraction risked per position."
+    )
+    stop_loss_pct: float = Field(
+        default=0.10, gt=0.0, le=1.0, description="Assumed stop distance as a fraction of price."
+    )
+
+
 class BacktestConfig(BaseModel):
     """Top-level backtest configuration.
 
@@ -34,8 +53,8 @@ class BacktestConfig(BaseModel):
         symbol: Instrument to trade, e.g. ``"BTC/USD"``.
         data_path: Path to the OHLCV CSV/parquet file.
         initial_cash: Starting cash in quote currency.
-        risk_fraction: Fraction of equity risked per position (risk-based sizing).
         seed: RNG seed for reproducible runs.
+        sizing: Risk-based position-sizing model.
         costs: Commission/slippage model.
     """
 
@@ -44,8 +63,8 @@ class BacktestConfig(BaseModel):
     symbol: str = "BTC/USD"
     data_path: Path
     initial_cash: float = Field(default=100_000.0, gt=0.0)
-    risk_fraction: float = Field(default=0.02, gt=0.0, le=1.0)
     seed: int = 42
+    sizing: SizingConfig = Field(default_factory=SizingConfig)
     costs: CostConfig = Field(default_factory=CostConfig)
 
     @classmethod
