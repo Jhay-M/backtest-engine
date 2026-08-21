@@ -82,11 +82,15 @@ class BacktestEngine:
         Returns:
             The portfolio's equity curve as a time-indexed frame.
         """
+        logger.info("backtest start: symbol=%s seed=%d", self.config.symbol, self.config.seed)
+        bars = 0
         while self.data.continue_backtest:
             bar = self.data.update_bars()
             if bar is None:
                 break
             self._process_bar(bar)
+            bars += 1
+        logger.info("backtest complete: %d bars processed", bars)
         return self.portfolio.equity_curve()
 
     def _process_bar(self, bar: MarketEvent) -> None:
